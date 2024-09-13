@@ -175,6 +175,9 @@ def make_coadd(
         coadd_wcs=coadd_wcs, coadd_bbox=coadd_bbox,
     )
 
+    print('coadd_cen_integer', coadd_cen_integer)
+    print('coadd_cen_skypos', coadd_cen_skypos)
+
     coadd_psf_bbox = get_coadd_psf_bbox(cen=coadd_cen_integer, dim=psf_dims[0])
     coadd_psf_wcs = coadd_wcs
 
@@ -210,6 +213,8 @@ def make_coadd(
             mfrac_warp = exp.mfrac_warp
             this_exp_info = exp.exp_info
         else:
+            print("Expousre wcs is", exp.getWcs())
+            print("Exposure bbox is ", exp.getBBox())
             warp, noise_warp, mfrac_warp, this_exp_info = warp_exposures(
                 exp=exp, coadd_wcs=coadd_wcs, coadd_bbox=coadd_bbox,
                 rng=rng, remove_poisson=remove_poisson, bad_mask_planes=bad_mask_planes,
@@ -780,15 +785,13 @@ def verify_warp(exp):
         # give fine grained feedback on what happened
         message = []
         for flagname in tocheck:
-            flag = exp.mask.getPlaneBitMask(flagname)
-            w = np.where(exp.mask.array & flag != 0)
+            w = np.where(exp.mask.array & all_flags != 0)
             if w[0].size > 0:
                 message += [
                     f'{w[0].size} pixels with {flagname}'
                 ]
-
-        message = ' and '.join(message)
-        raise WarpBoundaryError(message)
+            message = ' and '.join(message)
+            raise WarpBoundaryError(message)
 
         if False:
             vis.show_image_and_mask(exp)
