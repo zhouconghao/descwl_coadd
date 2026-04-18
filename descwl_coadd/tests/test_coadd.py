@@ -13,6 +13,11 @@ from descwl_coadd.coadd import make_coadd_obs, make_coadd, make_coadd_old
 from descwl_coadd.procflags import WARP_BOUNDARY
 from descwl_coadd.interp import CTInterpolator
 from descwl_shear_sims.galaxies import make_galaxy_catalog
+
+from lsst.meas.algorithms.cloughTocher2DInterpolator import (
+    CloughTocher2DInterpolateTask,
+)
+
 import logging
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
@@ -29,6 +34,7 @@ def _make_sim(
     se_dim=None,
     psf_dim=51,
     bad_columns=False,
+    im_dtype=np.float32,
 ):
     buff = 5
 
@@ -42,7 +48,7 @@ def _make_sim(
     )
 
     if se_dim is None:
-        se_dim = get_se_dim(coadd_dim=coadd_dim, dither=dither, rotate=rotate)
+        se_dim = get_se_dim(coadd_dim=coadd_dim, rotate=rotate)
 
     if psf_type == "ps":
         psf = make_ps_psf(rng=rng, dim=se_dim)
@@ -74,6 +80,7 @@ def _make_sim(
         dither=dither,
         rotate=rotate,
         bad_columns=bad_columns,
+        im_dtype=im_dtype,
     )
 
 
@@ -122,7 +129,8 @@ def test_coadds_smoke(dither, rotate):
 
 
 @pytest.mark.parametrize('buff', [4, 5])
-def test_coadds_with_interpolator_smoke(buff):
+@pytest.mark.parametrize('bad_columns', [False, True])
+def test_coadds_with_interpolator_smoke(buff, bad_columns):
     rng = np.random.RandomState(123)
 
     coadd_dim = 101
@@ -132,6 +140,7 @@ def test_coadds_with_interpolator_smoke(buff):
     sim_data = _make_sim(
         rng=rng, psf_type='gauss', bands=bands,
         coadd_dim=coadd_dim, psf_dim=psf_dim,
+        bad_columns=bad_columns,
     )
 
     interpolator = CTInterpolator(buff=buff)
@@ -163,7 +172,106 @@ def test_coadds_with_interpolator_smoke(buff):
         assert coadd_data['coadd_psf_exp'].image.array.shape == psf_dims
 
         assert np.all(np.isfinite(coadd_data['coadd_psf_exp'].image.array))
-        assert np.all(coadd_data['coadd_mfrac_exp'].image.array == 0)
+
+        if bad_columns:
+            assert np.any(coadd_data['coadd_mfrac_exp'].image.array)
+        else:
+            assert np.all(coadd_data['coadd_mfrac_exp'].image.array == 0)
+
+
+@pytest.mark.parametrize('flip_xy', [False, True])
+@pytest.mark.parametrize('buff', [4, 5])
+def test_coadd_equality_with_dm_interpolator(subtests, buff, flip_xy):
+    """Test that the DM-implementation of the interpolator behaves identical.
+    """
+    rng = np.random.RandomState(123)
+
+    coadd_dim = 101
+    psf_dim = 51
+
+    bands = ['r', 'i', 'z']
+    sim_data = _make_sim(
+        rng=rng, psf_type='gauss', bands=bands,
+        coadd_dim=coadd_dim, psf_dim=psf_dim,
+        stars=False, bad_columns=True,
+    )
+
+    our_interpolator = CTInterpolator(buff=buff)
+
+    config = CloughTocher2DInterpolateTask.ConfigClass()
+    config.interpLength = buff
+    config.badMaskPlanes = our_interpolator.bad_mask_planes
+    config.flipXY = flip_xy
+
+    dm_interpolator = CloughTocher2DInterpolateTask(config=config)
+
+    # coadd each band separately
+    bdata = sim_data['band_data']
+    for band in bands:
+        assert band in bdata
+        exps = bdata[band]
+
+        # Check that there are pixels to be interpolated.
+        bit_mask = exps[0].mask.getPlaneBitMask(our_interpolator.bad_mask_planes)
+        assert any((exp.mask.array & bit_mask).any() for exp in exps)
+
+        # Since interpolation changes the exposures in place, make a deep
+        # copy before making the coadds.
+        coadd_data = make_coadd(
+            exps=[exp.clone() for exp in exps],
+            coadd_wcs=sim_data['coadd_wcs'],
+            coadd_bbox=sim_data['coadd_bbox'],
+            psf_dims=sim_data['psf_dims'],
+            rng=rng,
+            remove_poisson=False,  # no object poisson noise in sims
+            interpolator=our_interpolator,
+        )
+
+        dm_coadd_data = make_coadd(
+            exps=exps,
+            coadd_wcs=sim_data['coadd_wcs'],
+            coadd_bbox=sim_data['coadd_bbox'],
+            psf_dims=sim_data['psf_dims'],
+            rng=rng,
+            remove_poisson=False,  # no object poisson noise in sims
+            interpolator=dm_interpolator,
+        )
+
+        # Compare only the main exposure since the noise realizations are
+        # different and mfrac is not affected by the interpolator.
+        if flip_xy:
+            # Exact agreement is expected only with flipXY config set to True.
+            np.testing.assert_array_equal(
+                dm_coadd_data['coadd_exp'].image.array,
+                coadd_data['coadd_exp'].image.array,
+            )
+        else:
+            with np.testing.assert_raises(AssertionError):
+                np.testing.assert_array_equal(
+                    dm_coadd_data['coadd_exp'].image.array,
+                    coadd_data['coadd_exp'].image.array,
+                )
+            # The agreement is not exact due to the different triangulation.
+            # The test is intended to benchmark the disagreement due to a
+            # different, but equally valid, choice of coordinates.
+            # | actual - desired | < atol + rtol * |desired|
+            with subtests.test(msg='Benchmark differences from DM interpolator'):
+                np.testing.assert_allclose(
+                    actual=dm_coadd_data['coadd_exp'].image.array,
+                    desired=coadd_data['coadd_exp'].image.array,
+                    atol=0.41,
+                    rtol=0.0,
+                )
+
+                # Limit to pixels that weren't bad to begin with, but suffer from
+                # warping the interpolated pixels nearby.
+                msk = coadd_data['coadd_exp'].mask.array == 0
+                np.testing.assert_allclose(
+                    actual=dm_coadd_data['coadd_exp'].image.array[msk],
+                    desired=coadd_data['coadd_exp'].image.array[msk],
+                    atol=0.063,
+                    rtol=0.0,
+                )
 
 
 @pytest.mark.parametrize('dither', [False, True])
@@ -597,6 +705,42 @@ def test_coadds_bad_max_maskfrac(max_maskfrac):
             remove_poisson=False,  # no object poisson noise in sims
             max_maskfrac=max_maskfrac,
         )
+
+
+@pytest.mark.parametrize('im_dtype', [np.float32, np.float64])
+def test_coadds_dtype(im_dtype):
+    rng = np.random.RandomState(55)
+
+    coadd_dim = 101
+    psf_dim = 51
+
+    bands = ['i']
+    sim_data = _make_sim(
+        rng=rng, psf_type='gauss', bands=bands,
+        coadd_dim=coadd_dim, psf_dim=psf_dim,
+        im_dtype=im_dtype,
+    )
+
+    exps = sim_data['band_data']['i']
+    assert all(exp.image.array.dtype == im_dtype for exp in exps
+               ), "Input exposure dtype mismatch"
+
+    coadd_data = make_coadd(
+        exps=exps,
+        coadd_wcs=sim_data['coadd_wcs'],
+        coadd_bbox=sim_data['coadd_bbox'],
+        psf_dims=sim_data['psf_dims'],
+        rng=rng,
+        remove_poisson=False,
+        im_dtype=im_dtype,
+    )
+
+    for tp in ['exp', 'noise_exp', 'mfrac_exp', 'psf_exp']:
+        name = f'coadd_{tp}'
+        coadd_exp = coadd_data[name]
+        assert coadd_exp.image.array.dtype == im_dtype, (
+            f'{tp} dtype mismatch, expected {im_dtype}',
+            f'got {coadd_exp.image.array.dtype}')
 
 
 if __name__ == '__main__':

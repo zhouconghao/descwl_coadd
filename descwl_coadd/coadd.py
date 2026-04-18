@@ -30,7 +30,7 @@ LOG = logging.getLogger('descwl_coadd.coadd')
 
 def make_coadd_obs(
     exps, coadd_wcs, coadd_bbox, psf_dims, rng, remove_poisson, psfs=None,
-    max_maskfrac=MAX_MASKFRAC,
+    max_maskfrac=MAX_MASKFRAC, im_dtype=np.float32,
 ):
     """
     Make a coadd from the input exposures and store in a CoaddObs, which
@@ -59,6 +59,9 @@ def make_coadd_obs(
         Maximum allowed masked fraction.  Images masked more than
         this will not be included in the coadd.  Must be in range
         [0, 1]
+    im_dtype: np.float32 or np.float64, optional
+        Numerical precision for the output images,
+        default is np.float32
 
     Returns
     -------
@@ -68,7 +71,6 @@ def make_coadd_obs(
         exp_info structured array with fields 'exp_id', 'flags', 'maskfrac'
             Flags are set to non zero for skipped exposures
     """
-
     coadd_data = make_coadd(
         exps=exps, coadd_wcs=coadd_wcs, coadd_bbox=coadd_bbox,
         psf_dims=psf_dims, psfs=psfs,
@@ -94,6 +96,7 @@ def make_coadd(
     exps, coadd_wcs, coadd_bbox, psf_dims, rng, remove_poisson, psfs=None,
     wcss=None, max_maskfrac=MAX_MASKFRAC, bad_mask_planes=FLAGS2INTERP,
     is_warps=False, interpolator=None, warper=None, mfrac_warper=None,
+    im_dtype=np.float32,
 ):
     """
     make a coadd from the input exposures, working in "online mode",
@@ -144,6 +147,9 @@ def make_coadd(
     mfrac_warper: afw_math.Warper, optional
         The warper to use for the masked fraction image. Used only if
         ``is_warps`` is False.
+    im_dtype: np.dtype, optional
+        The data type to use for the coadd images.
+        Options are np.float32 and np.float64.
 
     Returns
     -------
@@ -152,13 +158,13 @@ def make_coadd(
 
             nkept: int
                 Number of exposures deemed valid for coadding
-            coadd_exp : ExposureF
+            coadd_exp : ExposureF or ExposureD depending on the input im_dtype
                 The coadded image.
-            coadd_noise_exp : ExposureF
+            coadd_noise_exp : ExposureF or ExposureD depending on the input im_dtype
                 The coadded noise image.
-            coadd_psf_exp : ExposureF
+            coadd_psf_exp : ExposureF or ExposureD depending on the input im_dtype
                 The coadded PSF image.
-            coadd_mfrac_exp : ExposureF
+            coadd_mfrac_exp : ExposureF or ExposureD depending on the input im_dtype
                 The fraction of SE images interpolated in each coadd pixel.
     """
 
@@ -182,10 +188,11 @@ def make_coadd(
     coadd_psf_wcs = coadd_wcs
 
     # separately stack data, noise, and psf
-    coadd_exp = make_coadd_exposure(coadd_bbox, coadd_wcs, filter_label)
-    coadd_noise_exp = make_coadd_exposure(coadd_bbox, coadd_wcs, filter_label)
-    coadd_psf_exp = make_coadd_exposure(coadd_psf_bbox, coadd_psf_wcs, filter_label)
-    coadd_mfrac_exp = make_coadd_exposure(coadd_bbox, coadd_wcs, filter_label)
+    coadd_exp = make_coadd_exposure(coadd_bbox, coadd_wcs, filter_label, im_dtype)
+    coadd_noise_exp = make_coadd_exposure(coadd_bbox, coadd_wcs, filter_label, im_dtype)
+    coadd_psf_exp = make_coadd_exposure(coadd_psf_bbox, coadd_psf_wcs,
+                                        filter_label, im_dtype)
+    coadd_mfrac_exp = make_coadd_exposure(coadd_bbox, coadd_wcs, filter_label, im_dtype)
 
     coadd_dims = coadd_exp.image.array.shape
     stacker = make_stacker(coadd_dims=coadd_dims)
@@ -219,6 +226,7 @@ def make_coadd(
                 exp=exp, coadd_wcs=coadd_wcs, coadd_bbox=coadd_bbox,
                 rng=rng, remove_poisson=remove_poisson, bad_mask_planes=bad_mask_planes,
                 interpolator=interpolator, warper=warper, mfrac_warper=mfrac_warper,
+                im_dtype=im_dtype,
             )
 
         if this_exp_info['exp_id'] == -9999:
@@ -255,7 +263,8 @@ def make_coadd(
 
         psf_warp = warp_psf(psf=psf, wcs=wcs, coadd_wcs=coadd_wcs,
                             coadd_bbox=coadd_bbox, warper=warper,
-                            psf_dims=psf_dims, var=medvar, filter_label=filter_label)
+                            psf_dims=psf_dims, var=medvar, filter_label=filter_label,
+                            im_dtype=im_dtype)
 
         warps = [warp, noise_warp, psf_warp, mfrac_warp]
         add_all(stackers, warps, weight=1/medvar)
@@ -291,7 +300,7 @@ def make_coadd(
 
 def make_coadd_old(
     exps, coadd_wcs, coadd_bbox, psf_dims, rng, remove_poisson,
-    max_maskfrac=MAX_MASKFRAC,
+    max_maskfrac=MAX_MASKFRAC, im_dtype=np.float32,
 ):
     """
     make a coadd from the input exposures, working in "online mode",
@@ -317,6 +326,9 @@ def make_coadd_old(
         Maximum allowed masked fraction.  Images masked more than
         this will not be included in the coadd.  Must be in range
         [0, 1]
+    im_dtype: numpy dtype
+        Numerical precision for the output images,
+        default is np.float32
 
     Returns
     -------
@@ -325,13 +337,13 @@ def make_coadd_old(
 
             nkept: int
                 Number of exposures deemed valid for coadding
-            coadd_exp : ExposureF
+            coadd_exp : ExposureF or ExposureD depending on the input im_dtype
                 The coadded image.
-            coadd_noise_exp : ExposureF
+            coadd_noise_exp : ExposureF or ExposureD depending on the input im_dtype
                 The coadded noise image.
-            coadd_psf_exp : ExposureF
+            coadd_psf_exp : ExposureF or ExposureD depending on the input im_dtype
                 The coadded PSF image.
-            coadd_mfrac_exp : ExposureF
+            coadd_mfrac_exp : ExposureF or ExposureD depending on the input im_dtype
                 The fraction of SE images interpolated in each coadd pixel.
     """
 
@@ -352,10 +364,11 @@ def make_coadd_old(
     coadd_psf_wcs = coadd_wcs
 
     # separately stack data, noise, and psf
-    coadd_exp = make_coadd_exposure(coadd_bbox, coadd_wcs, filter_label)
-    coadd_noise_exp = make_coadd_exposure(coadd_bbox, coadd_wcs, filter_label)
-    coadd_psf_exp = make_coadd_exposure(coadd_psf_bbox, coadd_psf_wcs, filter_label)
-    coadd_mfrac_exp = make_coadd_exposure(coadd_bbox, coadd_wcs, filter_label)
+    coadd_exp = make_coadd_exposure(coadd_bbox, coadd_wcs, filter_label, im_dtype)
+    coadd_noise_exp = make_coadd_exposure(coadd_bbox, coadd_wcs, filter_label, im_dtype)
+    coadd_psf_exp = make_coadd_exposure(coadd_psf_bbox, coadd_psf_wcs,
+                                        filter_label, im_dtype)
+    coadd_mfrac_exp = make_coadd_exposure(coadd_bbox, coadd_wcs, filter_label, im_dtype)
 
     coadd_dims = coadd_exp.image.array.shape
     stacker = make_stacker(coadd_dims=coadd_dims)
@@ -410,7 +423,7 @@ def make_coadd_old(
         exp_info['maskfrac'][iexp] = maskfrac
 
         noise_exp, medvar = get_noise_exp(
-            exp=exp, rng=rng, remove_poisson=remove_poisson,
+            exp=exp, rng=rng, remove_poisson=remove_poisson, im_dtype=im_dtype
         )
         exp_info['weight'][iexp] = 1/medvar
 
@@ -419,7 +432,7 @@ def make_coadd_old(
             exp_info['flags'][iexp] |= HIGH_MASKFRAC
             continue
 
-        mfrac_exp = make_mfrac_exp(mfrac_msk=bad_msk, exp=exp)
+        mfrac_exp = make_mfrac_exp(mfrac_msk=bad_msk, exp=exp, im_dtype=im_dtype)
 
         if maskfrac > 0:
             # images modified internally
@@ -429,6 +442,7 @@ def make_coadd_old(
             exp=exp,
             coadd_cen_skypos=coadd_cen_skypos,
             var=medvar,
+            im_dtype=im_dtype,
         )
         assert psf_exp.variance.array[0, 0] == noise_exp.variance.array[0, 0]
 
@@ -521,6 +535,7 @@ def _get_default_mfrac_warper():
 def warp_exposures(
     exp, coadd_wcs, coadd_bbox, rng, remove_poisson, bad_mask_planes=FLAGS2INTERP,
     interpolator=None, warper=None, mfrac_warper=None, verify=True,
+    im_dtype=np.float32,
 ):
     """
     Warps the input exposures, noise image and masked fraction
@@ -529,7 +544,7 @@ def warp_exposures(
 
     Parameters
     ----------
-    exp: ExposureF or DeferredDatasetHandle
+    exp: ExposureF, ExposureD or DeferredDatasetHandle
         Either an Exposure or a corresponding DeferredDatasetHandle
     coadd_wcs: DM wcs object
         The target wcs
@@ -549,6 +564,8 @@ def warp_exposures(
         The warper to use for the masked fraction
     verify: bool, optional
         If True, verify that the warps completely overlap the cell region.
+    im_dtype: np.float32 or np.float64, optional
+        Numerical precision for the output images
 
     Returns
     -------
@@ -593,7 +610,7 @@ def warp_exposures(
     bad_msk, maskfrac = get_bad_mask(expobj, bad_mask_planes=bad_mask_planes)
 
     noise_exp, medvar = get_noise_exp(
-        exp=expobj, rng=rng, remove_poisson=remove_poisson,
+        exp=expobj, rng=rng, remove_poisson=remove_poisson, im_dtype=im_dtype
     )
 
     exp_info = get_info_struct(1)
@@ -602,12 +619,12 @@ def warp_exposures(
     exp_info['weight'] = 1/medvar
 
     try:
-        mfrac_exp = make_mfrac_exp(mfrac_msk=bad_msk, exp=expobj)
+        mfrac_exp = make_mfrac_exp(mfrac_msk=bad_msk, exp=expobj, im_dtype=im_dtype)
 
         if 0 < maskfrac < 1:
             # This modifies the image internally and sets INTRP in mask
-            interpolator.run(expobj)
-            interpolator.run(noise_exp)
+            interpolator.run(expobj.maskedImage)
+            interpolator.run(noise_exp.maskedImage)
 
             # interp_nocheck(exp=expobj, noise_exp=noise_exp, bad_msk=bad_msk)
 
@@ -645,7 +662,7 @@ def warp_exposures(
 
 
 def warp_psf(psf, wcs, coadd_wcs, coadd_bbox, psf_dims,
-             var=1.0, warper=None, filter_label=None):
+             var=1.0, warper=None, filter_label=None, im_dtype=np.float32):
     """Warp a PSF object to the coadd WCS and bounding box.and
 
     psf: `lsst.afw.detection.Psf`
@@ -662,10 +679,12 @@ def warp_psf(psf, wcs, coadd_wcs, coadd_bbox, psf_dims,
         The warper to use for the PSF. If None, the default warper will be used.
     filter_label: `lsst.afw.image.FilterLabel` or `str`, optional
         The filter label to set for the warped PSF.
+    im_dtype: `np.float32` or `np.float64`, optional
+        Nuermical precision of the output image, defaulted to be np.float32
 
     Returns
     -------
-    psf_warp: `lsst.afw.image.ExposureF`
+    psf_warp: `lsst.afw.image.ExposureF or lsst.afw.image.ExposureD`
         The warped image of the PSF.
     """
     # this is the requested coadd psf dims
@@ -691,7 +710,8 @@ def warp_psf(psf, wcs, coadd_wcs, coadd_bbox, psf_dims,
             wcs=wcs,
             coadd_cen_skypos=coadd_cen_skypos,
             var=var,
-            filter_label=filter_label)
+            filter_label=filter_label,
+            im_dtype=im_dtype)
 
     psf_warp, = _get_warps_for_exp([psf_exp], wcss, bboxes, warpers, [False])
 
@@ -770,7 +790,7 @@ def verify_warp(exp):
 
     Parameters
     ----------
-    exp: afw.image.ExposureF
+    exp: afw.image.ExposureF or afw.image.ExposureD
         The exposure to check
 
     Raises
@@ -797,7 +817,7 @@ def verify_warp(exp):
             vis.show_image_and_mask(exp)
 
 
-def make_coadd_exposure(coadd_bbox, coadd_wcs, filter_label):
+def make_coadd_exposure(coadd_bbox, coadd_wcs, filter_label, im_dtype):
     """
     make a coadd exposure with extra mask planes for
     rejected, clipped, sensor_edge
@@ -810,12 +830,14 @@ def make_coadd_exposure(coadd_bbox, coadd_wcs, filter_label):
         The wcs for the coadd exposure
     filter_label: FilterLabel
         Filter label to set
+    im_dtype: np.float32 or np.float64
+        Numerical precision of the output image
 
     Returns
     -------
-    ExpsureF
+    ExposureF or ExposureD depending on the input im_dtype
     """
-    coadd_exp = afw_image.ExposureF(coadd_bbox, coadd_wcs)
+    coadd_exp = afw_image.Exposure(coadd_bbox, coadd_wcs, dtype=im_dtype)
     coadd_exp.setFilter(filter_label)
 
     # these planes are added by DM, add them here for consistency
@@ -871,9 +893,9 @@ def _interp_nocheck_old(exp, noise_exp, bad_msk):
 
     Parameters
     ----------
-    exp: afw_image.ExposureF
+    exp: afw_image.ExposureF or afw_image.ExposureD
         The input exposure.  This is modified in place.
-    noise_exp: afw_image.ExposureF
+    noise_exp: afw_image.ExposureF or afw_image.ExposureD
         The input noise exposure.  This is modified in place.
     bad_msk: array
         A bool array with True set for masked pixels
@@ -894,7 +916,7 @@ def _interp_nocheck_old(exp, noise_exp, bad_msk):
     assert not np.any(np.isnan(noise_exp.image.array[bad_msk]))
 
 
-def make_mfrac_exp(*, mfrac_msk, exp):
+def make_mfrac_exp(*, mfrac_msk, exp, im_dtype=np.float32):
     """
     Make the masked fraction exposure.
 
@@ -902,23 +924,27 @@ def make_mfrac_exp(*, mfrac_msk, exp):
     ---------
     mfrac_msk : np.ndarray
         A boolean image with True where interpolation was done and False otherwise.
-    exp : ExposureF
+    exp : ExposureF or ExposureD
         The coadd exposure for this `mfrac`.
+    im_dtype: np.float32 or np.float64
+        Numerical precision of the output masked fraction.
+        Defaulted to be np.float32
 
     Returns
     -------
-    mfrac_exp : ExposureF
+    mfrac_exp : ExposureF or ExposureD depending on the input im_dtype
         The masked fraction exposure.
     """
+
     ny, nx = mfrac_msk.shape
-    mfrac_img = afw_image.MaskedImageF(width=nx, height=ny)
+    mfrac_img = afw_image.MaskedImage(width=nx, height=ny, dtype=im_dtype)
     assert mfrac_img.image.array.shape == (ny, nx)
 
     mfrac_img.image.array[:, :] = mfrac_msk.astype(float)
     mfrac_img.variance.array[:, :] = 0
     mfrac_img.mask.array[:, :] = exp.mask.array[:, :]
 
-    mfrac_exp = afw_image.ExposureF(mfrac_img)
+    mfrac_exp = afw_image.Exposure(mfrac_img, dtype=im_dtype)
     mfrac_exp.setPsf(exp.getPsf())
     mfrac_exp.setWcs(exp.getWcs())
     mfrac_exp.setFilter(exp.getFilter())
@@ -941,7 +967,7 @@ def _get_warps_for_exp(exps, wcss, bboxes, warpers, verify):
 
     Parameters
     ----------
-    exps: [ExposureF]
+    exps: [ExposureF or ExposureD]
         List of exposures to warp
     wcss: [wcs]
         List of wcs
@@ -952,7 +978,7 @@ def _get_warps_for_exp(exps, wcss, bboxes, warpers, verify):
 
     Returns
     -------
-    waprs: [ExposureF]
+    warps: [ExposureF or ExposureD]
         List of warped exposures
     """
     warps = []
@@ -975,7 +1001,7 @@ def get_warp(warper, exp, coadd_wcs, coadd_bbox):
     ----------
     warper: afw_math.Warper
         The warper
-    exp: afw_image.ExposureF
+    exp: afw_image.ExposureF or afw_image.ExposureD
         The exposure to warp and add
     coadd_wcs: DM wcs object
         The target wcs
@@ -1039,7 +1065,7 @@ def get_median_var(exp, remove_poisson):
 
     Parameters
     ----------
-    exp: afw.image.ExposureF
+    exp: afw.image.ExposureF or afw.image.ExposureD
         The image from which to get the median variance
     remove_poisson: bool
         If True, remove the poisson noise from the variance
@@ -1073,26 +1099,27 @@ def get_median_var(exp, remove_poisson):
     return var
 
 
-def get_noise_exp(exp, rng, remove_poisson):
+def get_noise_exp(exp, rng, remove_poisson, im_dtype=np.float32):
     """
     get a noise image based on the input exposure
 
     Parameters
     ----------
-    exp: afw.image.ExposureF
+    exp: afw.image.ExposureF or afw.image.ExposureD
         The exposure upon which to base the noise
     rng: np.random.RandomState
         The random number generator for making the noise image
     remove_poisson: bool
         If True, remove the poisson noise from the variance
         estimate.
+    im_dtype: np.float32 or np.float64
+        Numerical precision of the output image. Defaulted to be np.float32
 
     Returns
     -------
-    noise exposure
+    noise exposure and median variance
     """
-
-    noise_exp = afw_image.ExposureF(exp, deep=True)
+    noise_exp = afw_image.Exposure(exp, deep=True, dtype=im_dtype)
 
     signal = exp.image.array
 
@@ -1111,6 +1138,7 @@ def get_psf_exp_new(
     coadd_cen_skypos,
     var=1.0,
     filter_label=None,
+    im_dtype=np.float32,
 ):
     """
     create a psf exposure to be coadded, rendered at the
@@ -1119,17 +1147,19 @@ def get_psf_exp_new(
 
     Parameters
     ----------
-    exp: afw_image.ExposureF
+    exp: afw_image.ExposureF or afw_image.ExposureD
         The exposure
     coadd_cen_skypos: SpherePoint
         The sky position of the center of the coadd within its
         bbox
     var: float, optional
         The variance to set in the psf variance map
+    im_dtype: np.float32 or np.float64, optional
+        Numerical precision of the output image. Defaulted to be np.float32
 
     Returns
     -------
-    psf ExposureF
+    psf ExposureF or ExposureD depending on the input im_dtype
     """
 
     pos = wcs.skyToPixel(coadd_cen_skypos)
@@ -1141,7 +1171,7 @@ def get_psf_exp_new(
     psf_bbox = get_psf_bbox(pos=pos, dim=psf_dim)
 
     # wcs same as SE exposure
-    psf_exp = afw_image.ExposureF(psf_bbox, wcs)
+    psf_exp = afw_image.Exposure(psf_bbox, wcs, dtype=im_dtype)
     psf_exp.image.array[:, :] = psf_image
     psf_exp.variance.array[:, :] = var
     psf_exp.mask.array[:, :] = 0
@@ -1157,6 +1187,7 @@ def get_psf_exp(
     exp,
     coadd_cen_skypos,
     var,
+    im_dtype=np.float32,
 ):
     """
     create a psf exposure to be coadded, rendered at the
@@ -1165,17 +1196,19 @@ def get_psf_exp(
 
     Parameters
     ----------
-    exp: afw_image.ExposureF
+    exp: afw_image.ExposureF or afw_image.ExposureD
         The exposure
     coadd_cen_skypos: SpherePoint
         The sky position of the center of the coadd within its
         bbox
     var: float
         The variance to set in the psf variance map
+    im_dtype: np.float32 or np.float64, optional
+        Numerical precision of the output image. Defaulted to be np.float32
 
     Returns
     -------
-    psf ExposureF
+    psf ExposureF or ExposureD depending on the input im_dtype
     """
 
     wcs = exp.getWcs()
@@ -1189,7 +1222,7 @@ def get_psf_exp(
     psf_bbox = get_psf_bbox(pos=pos, dim=psf_dim)
 
     # wcs same as SE exposure
-    psf_exp = afw_image.ExposureF(psf_bbox, wcs)
+    psf_exp = afw_image.Exposure(psf_bbox, wcs, dtype=im_dtype)
     psf_exp.image.array[:, :] = psf_image
     psf_exp.variance.array[:, :] = var
     psf_exp.mask.array[:, :] = 0
@@ -1299,7 +1332,7 @@ def check_max_maskfrac(max_maskfrac):
     """
     if max_maskfrac < 0 or max_maskfrac > 1:
         raise ValueError(
-            'got max_maskfrac {max_maskfrac} outside allowed range [0, 1]'
+            f'got max_maskfrac {max_maskfrac} outside allowed range [0, 1]'
         )
 
 
@@ -1325,3 +1358,136 @@ def get_pbar(exps, nmin=5):
         return PBar(exps)
     else:
         return exps
+
+
+def get_coadd_psf_at_position(
+    exps,
+    coadd_wcs,
+    coadd_bbox,
+    psf_dims,
+    *,
+    image_pos=None,
+    world_pos=None,
+    rng=None,
+    remove_poisson=False,
+    psfs=None,
+    wcss=None,
+    max_maskfrac=MAX_MASKFRAC,
+    bad_mask_planes=FLAGS2INTERP,
+    warper=None,
+    im_dtype=np.float32,
+):
+    """
+    Build the *coadd PSF* evaluated at a specified position in the coadd image.
+
+    The function reconstructs the effective PSF at a given coadd location by:
+      (1) evaluating each SE (single-epoch) PSF at the sky position corresponding
+          to the requested coadd pixel location,
+      (2) warping each SE PSF image into the coadd WCS/bounding box, and
+      (3) stacking the warped PSFs with inverse-variance weights (1/medvar),
+          skipping inputs whose masked-pixel fraction exceeds ``max_maskfrac``.
+    The stacked PSF image is then normalized and returned as a ``KernelPsf``.
+
+    Parameters
+    ----------
+    exps : sequence of `lsst.afw.image.ExposureF` or `ExposureD`
+        Single-epoch exposures contributing to the coadd.
+    coadd_wcs : `lsst.afw.geom.SkyWcs`
+        WCS of the target coadd.
+    coadd_bbox : `lsst.geom.Box2I`
+        Bounding box (in coadd pixels) of the coadd cell/region.
+    psf_dims : tuple[int, int]
+        Desired PSF stamp dimensions (must be square and odd).
+    image_pos : tuple[float, float] or `lsst.geom.Point2D`, optional
+        Coadd pixel coordinates (x, y) at which to evaluate the PSF.
+    world_pos : `lsst.geom.SpherePoint`, optional
+        Sky position at which to evaluate the PSF.
+    rng : `numpy.random.RandomState`, optional
+        RNG used for generating per-exposure noise realizations when estimating
+        median variance via ``get_noise_exp``. If ``None``, an internal default
+        is used.
+    remove_poisson : bool, optional
+        If True, subtract Poisson contribution from the variance estimate
+        when computing weights. Default is False.
+    psfs : iterable of `lsst.afw.detection.Psf`, optional
+        SE PSF objects corresponding to ``exps``. If None, obtained from
+        each exposure via ``exp.getPsf()``.
+    wcss : iterable of `lsst.afw.geom.SkyWcs`, optional
+        SE WCS objects corresponding to ``exps``. If None, obtained via
+        ``exp.getWcs()``.
+    max_maskfrac : float, optional
+        Maximum allowed masked-pixel fraction for an SE image. Inputs with
+        masked fraction ≥ ``max_maskfrac`` are excluded. Must be in [0, 1].
+    bad_mask_planes : list[str], optional
+        Mask plane names considered “bad” when computing the masked fraction.
+    warper : `lsst.afw.math.Warper`, optional
+        Warper used to map SE PSFs into the coadd WCS. If None, a default warper
+        with kernel ``DEFAULT_INTERP`` is created.
+    im_dtype : `numpy.dtype`, optional
+        Floating precision for intermediate images (e.g., `np.float32`, `np.float64`).
+        If None, falls back to package defaults where applicable.
+
+    Returns
+    -------
+    psf : `lsst.meas.algorithms.KernelPsf`
+        The coadd PSF evaluated at the requested position.
+    """
+
+    check_max_maskfrac(max_maskfrac)
+    check_psf_dims(psf_dims)
+
+    if (image_pos is None) == (world_pos is None):
+        raise ValueError("You must provide exactly one of 'image_pos' or 'world_pos'.")
+
+    if world_pos is None:
+        if not isinstance(image_pos, geom.Point2D):
+            image_pos = geom.Point2D(*image_pos)
+        world_pos = coadd_wcs.pixelToSky(image_pos)
+
+    cen_int = geom.Point2I(int(np.floor(coadd_wcs.skyToPixel(world_pos).x + 0.5)),
+                           int(np.floor(coadd_wcs.skyToPixel(world_pos).y + 0.5)))
+    coadd_psf_bbox = get_coadd_psf_bbox(cen=cen_int, dim=psf_dims[0])
+    print(f"coadd psf bbox: {coadd_psf_bbox}")
+
+    filter_label = exps[0].getFilter()
+    coadd_psf_exp = make_coadd_exposure(coadd_psf_bbox, coadd_wcs,
+                                        filter_label, im_dtype)
+    psf_stacker = make_stacker(coadd_dims=psf_dims)
+
+    if psfs is None:
+        psfs = (exp.getPsf() for exp in exps)
+    if wcss is None:
+        wcss = (exp.getWcs() for exp in exps)
+    if warper is None:
+        warper = _get_default_image_warper()
+
+    if rng is None:
+        rng = np.random.RandomState(5)
+
+    for exp, psf, wcs in zip(exps, psfs, wcss):
+        bad_msk, maskfrac = get_bad_mask(exp, bad_mask_planes=bad_mask_planes)
+        if maskfrac >= max_maskfrac:
+            continue
+
+        noise_exp, medvar = get_noise_exp(exp=exp, rng=rng,
+                                          remove_poisson=remove_poisson,
+                                          im_dtype=im_dtype)
+        weight = 1.0 / medvar
+
+        psf_exp = get_psf_exp_new(
+            psf=psf,
+            wcs=wcs,
+            coadd_cen_skypos=world_pos,
+            var=medvar,
+            filter_label=filter_label,
+            im_dtype=im_dtype,
+        )
+
+        (psf_warp,) = _get_warps_for_exp(
+            [psf_exp], [coadd_wcs], [coadd_psf_bbox], [warper], [False]
+        )
+
+        psf_stacker.add_masked_image(psf_warp, weight=weight)
+
+    psf_stacker.fill_stacked_masked_image(coadd_psf_exp.maskedImage)
+    return extract_coadd_psf(coadd_psf_exp)
